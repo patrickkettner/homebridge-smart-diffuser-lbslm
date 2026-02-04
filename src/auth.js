@@ -1,13 +1,16 @@
 const http = require('http');
-const https = require('https');
 const querystring = require('querystring');
-const url = require('url');
 
-const HOST = 'amos.cn.lbslm.com';
+const HOSTS = {
+    'CN': 'amos.cn.lbslm.com',
+    'US': 'amos.us.lbslm.com'
+};
 
 class AuthClient {
-    constructor(log) {
+    constructor(log, region = 'CN') {
         this.log = log || console;
+        this.host = HOSTS[region] || HOSTS['CN'];
+        this.log.debug(`Using Auth Host: ${this.host}`);
     }
 
     async getCredentials(username, password) {
@@ -53,7 +56,7 @@ class AuthClient {
             });
 
             const options = {
-                hostname: HOST,
+                hostname: this.host,
                 port: 80,
                 path: '/admin/login.do',
                 method: 'POST',
@@ -73,7 +76,9 @@ class AuthClient {
                     } else {
                         // API may return 200 OK with "AuthenticationException" in the body.
                         let data = '';
-                        res.on('data', c => data += c);
+                        res.on('data', (c) => {
+                            data += c;
+                        });
                         res.on('end', () => {
                             if (data.includes("AuthenticationException")) {
                                 reject(new Error("Invalid Credentials"));
@@ -87,7 +92,9 @@ class AuthClient {
                 }
             });
 
-            req.on('error', (e) => reject(e));
+            req.on('error', (e) => {
+                reject(e);
+            });
             req.write(postData);
             req.end();
         });
@@ -95,7 +102,11 @@ class AuthClient {
 
     fetchDevices(cookies, uid) {
         return new Promise((resolve, reject) => {
-            const cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
+            let cookieArr = [];
+            for (const c of cookies) {
+                cookieArr.push(c.split(';')[0]);
+            }
+            const cookieStr = cookieArr.join('; ');
             const query = querystring.stringify({
                 online: 2,
                 uid: uid,
@@ -106,20 +117,23 @@ class AuthClient {
             const pathUrl = `/admin/amos/searchForWeb.do?${query}`;
 
             const options = {
-                hostname: HOST,
+                hostname: this.host,
                 port: 80,
                 path: pathUrl,
                 method: 'POST',
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'X-Requested-With': 'XMLHttpRequest'
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Cookie': cookieStr
                 },
                 timeout: 10000 // 10s timeout
             };
 
             const req = http.request(options, (res) => {
                 let data = '';
-                res.on('data', c => data += c);
+                res.on('data', (c) => {
+                    data += c;
+                });
                 res.on('end', () => {
                     try {
                         const json = JSON.parse(data);
@@ -134,7 +148,9 @@ class AuthClient {
                 });
             });
 
-            req.on('error', (e) => reject(e));
+            req.on('error', (e) => {
+                reject(e);
+            });
             req.end();
         });
     }

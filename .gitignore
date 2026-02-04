@@ -16,6 +16,7 @@ pnpm-lock.yaml
 yarn.lock
 package-lock.json
 analysis/
-test/
+.env
+.nyc_output
 credentials.json
 scripts/credentials.json

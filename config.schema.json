@@ -18,11 +18,22 @@
         "type": "string",
         "required": true,
         "description": "Your LBSLM Cloud account password."
+      },
+      "region": {
+        "title": "Region",
+        "type": "string",
+        "default": "CN",
+        "enum": [
+          "CN",
+          "US"
+        ],
+        "description": "Select your server region (CN for Global/China, US for USA)"
       }
     }
   },
   "layout": [
     "email",
-    "password"
+    "password",
+    "region"
   ]
 }

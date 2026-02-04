@@ -15,6 +15,7 @@ class DiffuserAccessory {
     this.appid = config.appid || '19987617';
     this.uid = config.uid;
     this.sessionId = config.sessionId;
+    this.isOn = false;
 
     if (!this.token || !this.nid || !this.sessionId) {
       this.log.error('Initialization failed: Cloud credentials missing. Auto-Discovery may have returned incomplete data.');
@@ -33,6 +34,10 @@ class DiffuserAccessory {
       'Connection': 'keep-alive',
       'Cookie': `appid=${this.appid};uid=${this.uid};token=${this.token};SESSIONID=${this.sessionId};username=${this.username}`
     };
+
+    // Services Setup
+    this.service = this.accessory.getService(this.platform.api.hap.Service.Fan) ||
+      this.accessory.addService(this.platform.api.hap.Service.Fan);
 
     // Child Lock
     if (!this.service.testCharacteristic(this.platform.api.hap.Characteristic.LockPhysicalControls)) {
@@ -63,9 +68,7 @@ class DiffuserAccessory {
 
     this.oilLevel = 100; // Cache
 
-    this.service = this.accessory.getService(this.platform.api.hap.Service.Fan) ||
-      this.accessory.addService(this.platform.api.hap.Service.Fan);
-
+    // Poll status periodically to maintain synchronization with physical device state.
     this.service.getCharacteristic(this.platform.api.hap.Characteristic.On)
       .onSet(this.setOn.bind(this))
       .onGet(this.getOn.bind(this));
@@ -206,22 +209,20 @@ class DiffuserAccessory {
 
               if (json.status === 'AuthenticationException' || json.status === '401') {
                 if (retryCount < 1) {
-                  this.log.debug(`Refeshing session for ${path}`);
+                  this.log.warn('Auth token expired. Refreshing session...');
                   try {
-                    const newCreds = await this.platform.refreshSession();
-                    this.token = newCreds.token;
-                    this.uid = newCreds.uid;
-                    this.sessionId = newCreds.sessionId;
+                    const creds = await this.platform.refreshSession();
+                    this.token = creds.token;
+                    this.uid = creds.uid;
+                    this.sessionId = creds.sessionId;
                     
-                    const result = await this._callApi(path, params, retryCount + 1);
-                    resolve(result);
-                    return;
-                  } catch (refreshErr) {
-                    reject(new Error("Session refresh failed: " + refreshErr.message));
-                    return;
+                    return resolve(this._callApi(path, params, retryCount + 1));
+                  } catch (err) {
+                    this.log.error('Session refresh failed:', err.message);
+                    reject(err);
                   }
                 } else {
-                  reject(new Error("Authentication failed even after refresh."));
+                  reject(new Error('Authentication failed after retry'));
                   return;
                 }
               }
@@ -249,6 +250,46 @@ class DiffuserAccessory {
 
       req.end();
     });
+  }
+
+  async getOilLevel() {
+    return this.oilLevel || 0;
+  }
+
+  async resetFilter(value) {
+    this.log.warn('Filter reset not implemented yet (no API endpoint).');
+  }
+
+  async pollStatus() {
+    this.log.debug('Polling device status...');
+    try {
+      const response = await this._callApi('/amosFragrance.do', { checkPermissions: 0 });
+      if (response && response.data) {
+        const data = response.data;
+
+        // update cached values
+        this.isOn = data.status === true;
+        this.oilLevel = data.liquidLevel || 0;
+
+        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.On, this.isOn);
+        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.FilterLifeLevel, this.oilLevel);
+
+        // Lock State
+        const lockState = data.lockMark
+          ? this.platform.api.hap.Characteristic.LockPhysicalControls.CONTROL_LOCK_ENABLED
+          : this.platform.api.hap.Characteristic.LockPhysicalControls.CONTROL_LOCK_DISABLED;
+        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.LockPhysicalControls, lockState);
+
+        // Rotation Speed (Run Time)
+        // 300s = 100%, so divide by 3
+        const speed = Math.min(100, Math.round((data.run || 0) / 3));
+        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.RotationSpeed, speed);
+
+        this.log.debug('Poll success:', JSON.stringify(data));
+      }
+    } catch (e) {
+      this.log.debug('Poll failed:', e.message);
+    }
   }
 }
 

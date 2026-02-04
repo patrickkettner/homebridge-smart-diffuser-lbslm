@@ -1,0 +1,6 @@
+
+# Ignore tests/src in production package
+test/
+src/tests/
+.env
+scripts/

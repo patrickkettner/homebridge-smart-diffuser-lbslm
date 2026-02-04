@@ -1,6 +1,6 @@
 {
   "name": "homebridge-smart-diffuser-lbslm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Homebridge plugin for Smart Diffuser (com.lbslm.fragrance) using Cloud API",
   "keywords": [
     "homebridge-plugin",
@@ -14,8 +14,16 @@
     "homebridge": ">=1.3.0"
   },
   "main": "index.js",
-  "dependencies": {},
+  "scripts": {
+    "test": "mocha --exit",
+    "coverage": "c8 --reporter=text --reporter=html npm test"
+  },
   "devDependencies": {
-    "homebridge": "^1.3.0"
+    "c8": "^9.1.0",
+    "dotenv": "^17.2.3",
+    "homebridge": "^1.3.0",
+    "mocha": "^11.7.5",
+    "sinon": "^21.0.1",
+    "proxyquire": "^2.1.3"
   }
 }

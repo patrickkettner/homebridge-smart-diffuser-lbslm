@@ -27,7 +27,7 @@ class DiffuserPlatform {
   }
 
   async autoDiscover() {
-    const auth = new AuthClient(this.log);
+    const auth = new AuthClient(this.log, this.config.region);
     try {
       const creds = await auth.getCredentials(this.config.email, this.config.password);
       if (creds) {
@@ -52,30 +52,32 @@ class DiffuserPlatform {
       return this._refreshPromise;
     }
 
-    this._refreshPromise = (async () => {
-      this.log.info("Session expired. Refreshing credentials...");
-      if (!this.config.email || !this.config.password) {
-        throw new Error("Cannot refresh session: No Email/Password configured.");
-      }
-
-      const auth = new AuthClient(this.log);
-      try {
-        const creds = await auth.getCredentials(this.config.email, this.config.password);
-        this.log.info("Session refreshed successfully.");
-        return {
-          token: creds.token,
-          uid: creds.uid,
-          sessionId: creds.sessionId
-        };
-      } catch (error) {
-        this.log.error("Failed to refresh session:", error.message);
-        throw error;
-      } finally {
-        this._refreshPromise = null;
-      }
-    })();
+    this._refreshPromise = this._executeRefresh().finally(() => {
+      this._refreshPromise = null;
+    });
 
     return this._refreshPromise;
+  }
+
+  async _executeRefresh() {
+    this.log.info("Session expired. Refreshing credentials...");
+    if (!this.config.email || !this.config.password) {
+      throw new Error("Cannot refresh session: No Email/Password configured.");
+    }
+
+    const auth = new AuthClient(this.log, this.config.region);
+    try {
+      const creds = await auth.getCredentials(this.config.email, this.config.password);
+      this.log.info("Session refreshed successfully.");
+      return {
+        token: creds.token,
+        uid: creds.uid,
+        sessionId: creds.sessionId
+      };
+    } catch (error) {
+      this.log.error("Failed to refresh session:", error.message);
+      throw error;
+    }
   }
 
   discoverDevices(devices, sessionCreds) {
@@ -105,7 +107,7 @@ class DiffuserPlatform {
       this.log.error('Cannot register accessory: Missing token or NID from Auto-Discovery.');
       return;
     }
-    const uuid = this.api.hap.uuid.generate(deviceConfig.nid || 'default-diffuser');
+    const uuid = this.api.hap.uuid.generate(deviceConfig.nid);
     const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
 
     if (existingAccessory) {
