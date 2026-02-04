@@ -287,7 +287,7 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
             const creds = { token: 't', uid: 'u', sessionId: 's' };
 
             platform.discoverDevices([
-                { nid: '1', deviceType: { typeCode: 'B5000' } },
+                { nid: '1', type: { typeCode: 'B5000' } },
                 { nid: '2' } // No deviceType
             ], creds);
 

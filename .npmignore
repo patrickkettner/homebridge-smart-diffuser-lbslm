@@ -1,6 +1,10 @@
+# Tests and Analysis
 test/
 src/tests/
-.env
-scripts/
 coverage/
 analysis/
+.nyc_output
+
+# Configuration & Scripts
+.env
+scripts/

@@ -9,7 +9,8 @@ const mockLog = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), d
 const Service = {
   Fan: 'Fan',
   FilterMaintenance: 'FilterMaintenance',
-  AccessoryInformation: 'AccessoryInformation'
+  AccessoryInformation: 'AccessoryInformation',
+  Switch: 'Switch'
 };
 
 const Characteristic = {
@@ -64,12 +65,14 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       context: {
         device: { nid: `nid-${crypto.randomUUID()}`, token: 'token', uid: 'uid', sessionId: 'sid' }
       },
+      services: [], // Store services for retrieval in tests
       getService: sinon.stub(),
       addService: sinon.stub(),
       displayName: 'Test Diffuser'
     };
 
-    const createMockService = () => ({
+    const createMockService = (subtype) => ({
+      subtype,
       getCharacteristic: sinon.stub().returns({
         onSet: sinon.stub().returnsThis(),
         onGet: sinon.stub().returnsThis(),
@@ -86,24 +89,30 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
     // Ensure getService returns the SAME object instance per service type for consistent stub usage
     const fanService = createMockService();
     const filterService = createMockService();
+    const switchService = createMockService('refill-oil-switch');
+
     // Persistent mock for AccessoryInformation to verify metadata initialization
     const accessoryInfoService = {
       setCharacteristic: sinon.stub().returnsThis(),
       getCharacteristic: sinon.stub().returns({ onSet: sinon.stub().returnsThis(), onGet: sinon.stub().returnsThis() })
     };
 
-    mockAccessory.getService.callsFake((type) => {
+    // Helper to store/retrieve services
+    const getOrAdd = (type, name, subtype) => {
       if (type === Service.Fan) return fanService;
       if (type === Service.FilterMaintenance) return filterService;
-      if (type === 'AccessoryInformation' || (type && type.toString && type.toString() === 'AccessoryInformation') || typeof type === 'function') {
+      if (type === Service.Switch || name === 'Refill Oil') return switchService;
+      if (type === 'AccessoryInformation' || (type && type.toString && type.toString() === 'AccessoryInformation')) {
         return accessoryInfoService;
       }
       return null;
-    });
-    mockAccessory.addService.callsFake((type) => {
-      if (type === Service.Fan) return fanService;
-      if (type === Service.FilterMaintenance) return filterService;
-      return null;
+    };
+
+    mockAccessory.getService.callsFake((type) => getOrAdd(type));
+    mockAccessory.addService.callsFake((type, name, subtype) => {
+      const s = getOrAdd(type, name, subtype);
+      if (s) mockAccessory.services.push(s); // Track it
+      return s;
     });
 
     mockConfig = { nid: '12345', name: 'Test Diffuser', oilName: 'Test Scent', hsn: 'SN123' };
@@ -136,27 +145,82 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       // Actually, let's make sure we test the specific props.
     });
 
-    it('should map specific model and scent to firmware', () => {
-      mockConfig = { nid: '123', name: 'Dev', hsn: 'SN1', oilName: 'Lavender', model: 'B5000' };
-      accessoryInstance = new DiffuserAccessory(mockPlatform, mockAccessory, mockConfig);
+    it('should correctly map Model to Scents', () => {
+      const config = {
+        nid: '123',
+        name: 'Test Diffuser',
+        model: 'B5000',
+        hsn: 'SN123',
+        oilName: 'Lavender'
+      };
+      new DiffuserAccessory(mockPlatform, mockAccessory, config);
 
       const infoService = mockAccessory.getService('AccessoryInformation');
 
-      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Model, 'B5000'));
-      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.FirmwareRevision, 'Scent: Lavender'));
-      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, 'SN1'));
+      // Assertions
+      // Model -> should now be the SCENT name (Lavender), formatted as "Scent: Lavender"
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Model, 'Scent: Lavender'), 'Model should be set to "Scent: Lavender"');
+
+      // Serial -> HSN
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, 'SN123'), 'Serial should be set to HSN');
     });
 
-    it('should fallback to defaults if metadata missing', () => {
-      mockConfig = { nid: '999', name: 'Plain Device' };
-      // Re-init
-      accessoryInstance = new DiffuserAccessory(mockPlatform, mockAccessory, mockConfig);
+    it('should trigger resetFilter via Helper Switch', async () => {
+      // Stub network request for resetLiquidLevel
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({
+        statusCode: 200,
+        on: (evt, cb) => { if (evt === 'data') cb(JSON.stringify({ status: '200', data: true })); if (evt === 'end') cb(); }
+      });
+
+      const config = { nid: '123', name: 'Test', oilName: 'TestOil' };
+      const diffuser = new DiffuserAccessory(mockPlatform, mockAccessory, config);
+
+      // Spy on resetFilter
+      const resetSpy = sinon.spy(diffuser, 'resetFilter');
+
+      // We need to find the Service that was returned. 
+      // In our mock, addService pushes to mockAccessory.services if we updated it correctly.
+      // But getService also returns it.
+      const resetSwitch = mockAccessory.services.find(s => s.subtype === 'refill-oil-switch') || mockAccessory.getService('Refill Oil');
+      assert.ok(resetSwitch, 'Reset Switch service should exist');
+
+      // Retrieve the onSet handler.
+      // getCharacteristic returns a mock object with onSet spy.
+      // We need to capture the function passed to onSet.
+      // Our mock: getCharacteristic(...).onSet returns this. 
+      // DiffuserAccessory calls: .onSet(async (value) => { ... })
+      // So onSet was calledWith(function)
+
+      const onSetStub = resetSwitch.getCharacteristic(mockApi.hap.Characteristic.On).onSet;
+      assert.ok(onSetStub.called, 'onSet should have been called');
+      const handler = onSetStub.args[0][0]; // The first argument of the first call
+
+      // Trigger it
+      await handler(true);
+
+      const resetCall = httpRequestStub.getCalls().find(call => call.args[0].path.includes('/resetLiquidLevel.do'));
+
+      assert.ok(resetCall, 'Must make a request to resetLiquidLevel.do');
+      assert.ok(resetCall.args[0].path.includes('liquidLevel=100'), 'Must set level to 100');
+    });
+
+    it('should handle missing metadata gracefully', () => {
+      const config = {
+        nid: '123',
+        name: 'Test Diffuser'
+        // No model, hsn, or oilName
+      };
+      new DiffuserAccessory(mockPlatform, mockAccessory, config);
 
       const infoService = mockAccessory.getService('AccessoryInformation');
 
+      // Assertions
+      // Fallback for Model -> Smart Diffuser
       assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Model, 'Smart Diffuser'));
-      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, '999'));
-      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.FirmwareRevision, ""));
+      // Fallback for Serial -> NID
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, '123'));
     });
   });
 

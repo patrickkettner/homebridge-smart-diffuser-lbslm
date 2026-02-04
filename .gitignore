@@ -1,22 +1,36 @@
+# Dependencies
 node_modules/
-.DS_Store
+
+# Logs
+logs
 *.log
-coverage/
-pids/
-*.pid
-*.seed
-*.pid.lock
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-pnpm-lock.yaml
-yarn.lock
-package-lock.json
-analysis/
-.env
+
+# Runtime
+pids
+*.pid
+*.pid.lock
+*.seed
+
+# Coverage & Reports
+coverage/
 .nyc_output
+analysis/
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Credentials & Config
+.env
 credentials.json
 scripts/credentials.json
+
+# System
+.DS_Store
+
+# Package Managers
+yarn.lock
+package-lock.json
+pnpm-lock.yaml

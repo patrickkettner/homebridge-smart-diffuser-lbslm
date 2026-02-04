@@ -93,7 +93,8 @@ class DiffuserPlatform {
           uid: sessionCreds.uid,
           sessionId: sessionCreds.sessionId,
           oilName: device.oilName,
-          model: (device.deviceType && device.deviceType.typeCode) ? device.deviceType.typeCode : 'Smart Diffuser'
+          model: (device.type && device.type.typeCode) ? device.type.typeCode : 'Smart Diffuser',
+          hsn: device.hsn
         };
         this.addAccessory(deviceConfig);
       });

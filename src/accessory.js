@@ -38,9 +38,8 @@ class DiffuserAccessory {
     // Update Accessory Information
     this.accessory.getService(this.platform.api.hap.Service.AccessoryInformation)
       .setCharacteristic(this.platform.api.hap.Characteristic.Manufacturer, "Guangzhou You'an Information Technology Co., Ltd.")
-      .setCharacteristic(this.platform.api.hap.Characteristic.Model, this.config.model || 'Smart Diffuser')
+      .setCharacteristic(this.platform.api.hap.Characteristic.Model, this.config.oilName ? `Scent: ${this.config.oilName}` : 'Smart Diffuser')
       .setCharacteristic(this.platform.api.hap.Characteristic.SerialNumber, this.config.hsn || this.config.nid)
-      .setCharacteristic(this.platform.api.hap.Characteristic.FirmwareRevision, this.config.oilName ? `Scent: ${this.config.oilName}` : "")
       .setCharacteristic(this.platform.api.hap.Characteristic.Name, this.config.name);
 
     // Services Setup
@@ -59,6 +58,22 @@ class DiffuserAccessory {
       .onSet(this.setLock.bind(this));
 
     this.lockService = this.service; // Alias for consistency
+    // Reset Switch (Workaround for hidden native Reset button)
+    // Using a clear "Switch" service ensures it appears in the UI.
+    this.resetSwitch = this.accessory.getService('Refill Oil') ||
+      this.accessory.addService(this.platform.api.hap.Service.Switch, 'Refill Oil', 'refill-oil-switch');
+
+    this.resetSwitch.getCharacteristic(this.platform.api.hap.Characteristic.On)
+      .onGet(() => false) // Always off by default
+      .onSet(async (value) => {
+        if (value) {
+          await this.resetFilter();
+          // Reset switch to off after a short delay (momentary)
+          setTimeout(() => {
+            this.resetSwitch.updateCharacteristic(this.platform.api.hap.Characteristic.On, false);
+          }, 1000);
+        }
+      });
 
     // Filter Service (Oil Level)
     this.filterService = this.accessory.getService(this.platform.api.hap.Service.FilterMaintenance) ||
