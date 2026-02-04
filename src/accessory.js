@@ -35,9 +35,20 @@ class DiffuserAccessory {
       'Cookie': `appid=${this.appid};uid=${this.uid};token=${this.token};SESSIONID=${this.sessionId};username=${this.username}`
     };
 
+    // Update Accessory Information
+    this.accessory.getService(this.platform.api.hap.Service.AccessoryInformation)
+      .setCharacteristic(this.platform.api.hap.Characteristic.Manufacturer, "Guangzhou You'an Information Technology Co., Ltd.")
+      .setCharacteristic(this.platform.api.hap.Characteristic.Model, this.config.model || 'Smart Diffuser')
+      .setCharacteristic(this.platform.api.hap.Characteristic.SerialNumber, this.config.hsn || this.config.nid)
+      .setCharacteristic(this.platform.api.hap.Characteristic.FirmwareRevision, this.config.oilName ? `Scent: ${this.config.oilName}` : "")
+      .setCharacteristic(this.platform.api.hap.Characteristic.Name, this.config.name);
+
     // Services Setup
     this.service = this.accessory.getService(this.platform.api.hap.Service.Fan) ||
       this.accessory.addService(this.platform.api.hap.Service.Fan);
+
+
+
 
     // Child Lock
     if (!this.service.testCharacteristic(this.platform.api.hap.Characteristic.LockPhysicalControls)) {
@@ -148,17 +159,29 @@ class DiffuserAccessory {
 
     await this._callApi('/updateTimer.do', params);
   }
-  async setLock(value) {
-    // value: 1 = LOCKED, 0 = UNLOCKED
-    const isLocked = value === this.platform.api.hap.Characteristic.LockPhysicalControls.CONTROL_LOCK_ENABLED;
-    // Lock control endpoint has not been identified in current API analysis.
-    // Logging warning and handling as read-only status.
-    this.log.warn('Lock control not yet implemented/captured. Only status is reported.');
 
-    // Revert UI to match actual state (polled later)
-    setTimeout(() => {
-      this.pollStatus();
-    }, 1000);
+  async setLock(value) {
+    this.log.info(`Setting Lock to: ${value} (via Cloud API)`);
+
+    try {
+      if (value) {
+        // Lock: /admin/amos/deviceLock.do
+        await this._callApi('/admin/amos/deviceLock.do');
+      } else {
+        // Unlock: /admin/amos/deviceUnlock.do?days=0&name=
+        await this._callApi('/admin/amos/deviceUnlock.do', { days: 0, name: '' });
+      }
+
+      // Optimistically update cache or poll
+      setTimeout(() => this.pollStatus(), 1000);
+    } catch (error) {
+      this.log.error('Failed to set Lock:', error.message);
+      this.log.warn('Reverting Lock usage due to API failure.');
+      setTimeout(() => {
+        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.LockPhysicalControls, !value ? 1 : 0);
+      }, 500);
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
   }
 
   async setOn(value) {
@@ -188,10 +211,14 @@ class DiffuserAccessory {
         ...params
       }).toString();
 
+      // Determine full path: if path starts with /admin, treat as root-relative. 
+      // Otherwise prepend basePath (/amosFragrance).
+      const resourcePath = path.startsWith('/admin') ? path : `${this.basePath}${path}`;
+
       const options = {
         hostname: this.hostname,
         port: 80,
-        path: `${this.basePath}${path}?${queryParams}`,
+        path: `${resourcePath}?${queryParams}`,
         method: 'GET',
         headers: {
           ...this.headers,
@@ -257,7 +284,23 @@ class DiffuserAccessory {
   }
 
   async resetFilter(value) {
-    this.log.warn('Filter reset not implemented yet (no API endpoint).');
+    this.log.info(`Request to Reset Filter (Setting Liquid Level to 100% via Cloud API)`);
+    try {
+      // Endpoint confirmed by user: /amosFragrance/resetLiquidLevel.do?liquidLevel=100
+      await this._callApi('/resetLiquidLevel.do', { liquidLevel: 100 });
+
+      // Update local cache immediately
+      this.oilLevel = 100;
+      this.filterService.updateCharacteristic(this.platform.api.hap.Characteristic.FilterLifeLevel, 100);
+      this.filterService.updateCharacteristic(this.platform.api.hap.Characteristic.FilterChangeIndication, this.platform.api.hap.Characteristic.FilterChangeIndication.FILTER_OK);
+
+      this.log.info('Filter Reset Successful');
+    } catch (error) {
+      this.log.error('Failed to Reset Filter:', error.message);
+      // Revert the "Reset" switch if possible, though it's stateless.
+      // We should probably just log.
+      throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+    }
   }
 
   async pollStatus() {
@@ -272,7 +315,7 @@ class DiffuserAccessory {
         this.oilLevel = data.liquidLevel || 0;
 
         this.service.updateCharacteristic(this.platform.api.hap.Characteristic.On, this.isOn);
-        this.service.updateCharacteristic(this.platform.api.hap.Characteristic.FilterLifeLevel, this.oilLevel);
+        this.filterService.updateCharacteristic(this.platform.api.hap.Characteristic.FilterLifeLevel, this.oilLevel);
 
         // Lock State
         const lockState = data.lockMark

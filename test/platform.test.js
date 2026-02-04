@@ -16,7 +16,7 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
             on: sinon.stub(),
             hap: {
                 uuid: { generate: sinon.stub().callsFake((val) => `uuid-${val}`) },
-                Service: { Fan: 'Fan', FilterMaintenance: 'Filter' },
+                Service: { Fan: 'Fan', FilterMaintenance: 'Filter', AccessoryInformation: 'AccessoryInformation' },
                 Characteristic: {
                     On: 'On',
                     RotationSpeed: 'Speed',
@@ -34,7 +34,14 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
                     this.displayName = name;
                     this.context = {};
                 }
-                getService() { return null; }
+                getService(type) {
+                    if (type === 'AccessoryInformation') {
+                        return {
+                            setCharacteristic: sinon.stub().returnsThis()
+                        };
+                    }
+                    return null;
+                }
                 addService() {
                     return {
                         getCharacteristic: sinon.stub().returns({
@@ -42,11 +49,13 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
                             onGet: sinon.stub().returnsThis()
                         }),
                         testCharacteristic: sinon.stub().returns(false),
-                        addCharacteristic: sinon.stub()
+                        addCharacteristic: sinon.stub(),
+                        setCharacteristic: sinon.stub().returnsThis()
                     };
                 }
             },
-            registerPlatformAccessories: sinon.stub()
+            registerPlatformAccessories: sinon.stub(),
+            updatePlatformAccessories: sinon.stub()
         };
         platform = new DiffuserPlatform(mockLog, mockConfig, mockApi);
     });
@@ -176,11 +185,15 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
                 UUID: `uuid-${uniqueNid}`,
                 displayName: 'Diffuser 1',
                 context: {},
-                getService: sinon.stub().returns(null),
+                getService: sinon.stub().callsFake((type) => {
+                    if (type === 'AccessoryInformation') return { setCharacteristic: sinon.stub().returnsThis() };
+                    return null;
+                }),
                 addService: sinon.stub().returns({
                     getCharacteristic: sinon.stub().returns({ onSet: sinon.stub().returnsThis(), onGet: sinon.stub().returnsThis() }),
                     testCharacteristic: sinon.stub().returns(false),
-                    addCharacteristic: sinon.stub()
+                    addCharacteristic: sinon.stub(),
+                    setCharacteristic: sinon.stub().returnsThis()
                 })
             };
             platform.accessories.push(cachedAccessory);
@@ -191,6 +204,36 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
             // Assert
             assert.ok(mockApi.registerPlatformAccessories.notCalled, 'Should not register again');
             assert.ok(mockLog.info.calledWithMatch(/Restoring/), 'Should log restoration');
+        });
+
+        it('should update accessory name if changed', () => {
+            // Arrange
+            const uniqueNid = `nid-${crypto.randomUUID()}`;
+            const deviceConfig = { name: 'New Name', nid: uniqueNid, token: 't', uid: 'u', sessionId: 's' };
+
+            const cachedAccessory = {
+                UUID: `uuid-${uniqueNid}`,
+                displayName: 'Old Name',
+                context: {},
+                getService: sinon.stub().callsFake((type) => {
+                    if (type === 'AccessoryInformation') return { setCharacteristic: sinon.stub().returnsThis() };
+                    return null;
+                }),
+                addService: sinon.stub().returns({
+                    getCharacteristic: sinon.stub().returns({ onSet: sinon.stub().returnsThis(), onGet: sinon.stub().returnsThis() }),
+                    testCharacteristic: sinon.stub().returns(false),
+                    addCharacteristic: sinon.stub(),
+                    setCharacteristic: sinon.stub().returnsThis()
+                })
+            };
+            platform.accessories.push(cachedAccessory);
+
+            // Act
+            platform.addAccessory(deviceConfig);
+
+            // Assert
+            assert.strictEqual(cachedAccessory.displayName, 'New Name');
+            assert.ok(mockApi.updatePlatformAccessories.calledOnceWith([cachedAccessory]));
         });
 
         it('should abort if Token or NID is missing', () => {
@@ -221,6 +264,36 @@ describe('DiffuserPlatform (Platinum Standard)', () => {
             assert.strictEqual(addAccessoryStub.callCount, 2);
             assert.strictEqual(addAccessoryStub.firstCall.args[0].name, 'HSN_Name');
             assert.strictEqual(addAccessoryStub.secondCall.args[0].name, 'Smart Diffuser');
+        });
+
+        it('should prioritize nickname > deviceAlias > hsn', () => {
+            const addAccessoryStub = sinon.stub(platform, 'addAccessory');
+            const creds = { token: 't', uid: 'u', sessionId: 's' };
+
+            platform.discoverDevices([
+                { nid: '1', nickname: 'My Nickname', deviceAlias: 'Alias', hsn: 'HSN' },
+                { nid: '2', deviceAlias: 'Alias', hsn: 'HSN' },
+                { nid: '3', hsn: 'HSN' }
+            ], creds);
+
+            assert.strictEqual(addAccessoryStub.callCount, 3);
+            assert.strictEqual(addAccessoryStub.firstCall.args[0].name, 'My Nickname');
+            assert.strictEqual(addAccessoryStub.secondCall.args[0].name, 'Alias');
+            assert.strictEqual(addAccessoryStub.thirdCall.args[0].name, 'HSN');
+        });
+
+        it('should extract model from deviceType if available', () => {
+            const addAccessoryStub = sinon.stub(platform, 'addAccessory');
+            const creds = { token: 't', uid: 'u', sessionId: 's' };
+
+            platform.discoverDevices([
+                { nid: '1', deviceType: { typeCode: 'B5000' } },
+                { nid: '2' } // No deviceType
+            ], creds);
+
+            assert.strictEqual(addAccessoryStub.callCount, 2);
+            assert.strictEqual(addAccessoryStub.firstCall.args[0].model, 'B5000');
+            assert.strictEqual(addAccessoryStub.secondCall.args[0].model, 'Smart Diffuser');
         });
 
         it('should log error if provided empty device list', () => {

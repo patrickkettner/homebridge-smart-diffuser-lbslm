@@ -85,13 +85,15 @@ class DiffuserPlatform {
     if (devices && devices.length > 0) {
       devices.forEach(device => {
         const deviceConfig = {
-          name: device.deviceAlias || device.hsn || 'Smart Diffuser',
+          name: device.nickname || device.deviceAlias || device.hsn || 'Smart Diffuser',
           nid: device.nid.toString(),
           token: sessionCreds.token,
           username: this.config.email,
           appid: this.config.appid || '19987617',
           uid: sessionCreds.uid,
-          sessionId: sessionCreds.sessionId
+          sessionId: sessionCreds.sessionId,
+          oilName: device.oilName,
+          model: (device.deviceType && device.deviceType.typeCode) ? device.deviceType.typeCode : 'Smart Diffuser'
         };
         this.addAccessory(deviceConfig);
       });
@@ -112,6 +114,11 @@ class DiffuserPlatform {
 
     if (existingAccessory) {
       this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+      if (existingAccessory.displayName !== deviceConfig.name) {
+        this.log.info(`Updating Accessory Name: ${existingAccessory.displayName} -> ${deviceConfig.name}`);
+        existingAccessory.displayName = deviceConfig.name;
+        this.api.updatePlatformAccessories([existingAccessory]);
+      }
       new DiffuserAccessory(this, existingAccessory, deviceConfig);
     } else {
       this.log.info('Adding new accessory:', deviceConfig.name);

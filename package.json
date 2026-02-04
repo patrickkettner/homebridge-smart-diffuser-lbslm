@@ -1,6 +1,6 @@
 {
   "name": "homebridge-smart-diffuser-lbslm",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Homebridge plugin for Smart Diffuser (com.lbslm.fragrance) using Cloud API",
   "keywords": [
     "homebridge-plugin",

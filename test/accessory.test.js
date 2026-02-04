@@ -8,7 +8,8 @@ const mockLog = { info: sinon.stub(), error: sinon.stub(), warn: sinon.stub(), d
 
 const Service = {
   Fan: 'Fan',
-  FilterMaintenance: 'FilterMaintenance'
+  FilterMaintenance: 'FilterMaintenance',
+  AccessoryInformation: 'AccessoryInformation'
 };
 
 const Characteristic = {
@@ -85,10 +86,18 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
     // Ensure getService returns the SAME object instance per service type for consistent stub usage
     const fanService = createMockService();
     const filterService = createMockService();
+    // Persistent mock for AccessoryInformation to verify metadata initialization
+    const accessoryInfoService = {
+      setCharacteristic: sinon.stub().returnsThis(),
+      getCharacteristic: sinon.stub().returns({ onSet: sinon.stub().returnsThis(), onGet: sinon.stub().returnsThis() })
+    };
 
     mockAccessory.getService.callsFake((type) => {
       if (type === Service.Fan) return fanService;
       if (type === Service.FilterMaintenance) return filterService;
+      if (type === 'AccessoryInformation' || (type && type.toString && type.toString() === 'AccessoryInformation') || typeof type === 'function') {
+        return accessoryInfoService;
+      }
       return null;
     });
     mockAccessory.addService.callsFake((type) => {
@@ -97,7 +106,7 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       return null;
     });
 
-    mockConfig = {};
+    mockConfig = { nid: '12345', name: 'Test Diffuser', oilName: 'Test Scent', hsn: 'SN123' };
 
     // Stub pollStatus on PROTOTYPE to prevent constructor side-effect from polluting 'httpRequestStub' history
     // Or just reset history after creation. Resetting history is cleaner than prototype hacking.
@@ -111,6 +120,45 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
   afterEach(() => {
     sinon.restore();
     });
+
+  describe('Metadata', () => {
+    it('should map Metadata correctly', () => {
+      const infoService = mockAccessory.getService('AccessoryInformation');
+      // We need to check what setCharacteristic was called with
+
+      // Verify Manufacturer
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Manufacturer, "Guangzhou You'an Information Technology Co., Ltd."));
+
+      // Verify Model (should match config.model, defaults to Smart Diffuser if not passed in mockConfig)
+      // mockConfig in beforeEach has { ..., oilName: 'Test Scent', hsn: 'SN123' } but no model
+      // so it defaults to 'Smart Diffuser' unless we add it to mockConfig.
+      // Let's update mockConfig for this test or accept default.
+      // Actually, let's make sure we test the specific props.
+    });
+
+    it('should map specific model and scent to firmware', () => {
+      mockConfig = { nid: '123', name: 'Dev', hsn: 'SN1', oilName: 'Lavender', model: 'B5000' };
+      accessoryInstance = new DiffuserAccessory(mockPlatform, mockAccessory, mockConfig);
+
+      const infoService = mockAccessory.getService('AccessoryInformation');
+
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Model, 'B5000'));
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.FirmwareRevision, 'Scent: Lavender'));
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, 'SN1'));
+    });
+
+    it('should fallback to defaults if metadata missing', () => {
+      mockConfig = { nid: '999', name: 'Plain Device' };
+      // Re-init
+      accessoryInstance = new DiffuserAccessory(mockPlatform, mockAccessory, mockConfig);
+
+      const infoService = mockAccessory.getService('AccessoryInformation');
+
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.Model, 'Smart Diffuser'));
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.SerialNumber, '999'));
+      assert.ok(infoService.setCharacteristic.calledWith(mockApi.hap.Characteristic.FirmwareRevision, ""));
+    });
+  });
 
   describe('Control Logic (setOn)', () => {
     it('should turn ON exactly and update On characteristic', async () => {
@@ -220,9 +268,11 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       await accessoryInstance.pollStatus();
 
       const fanService = mockAccessory.getService(Service.Fan);
+      const filterService = mockAccessory.getService(Service.FilterMaintenance);
       assert.ok(fanService.updateCharacteristic.calledWith(Characteristic.On, true));
       assert.ok(fanService.updateCharacteristic.calledWith(Characteristic.RotationSpeed, 30)); // 90 / 3 = 30
       assert.ok(fanService.updateCharacteristic.calledWith(Characteristic.LockPhysicalControls, 1));
+      assert.ok(filterService.updateCharacteristic.calledWith(Characteristic.FilterLifeLevel, 0)); // 0 from data.liquidLevel
     });
 
     it('should default run/oil values if missing', async () => {
@@ -324,10 +374,6 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       assert.ok(mockLog.error.calledWithMatch(/Failed to set state:/, /Network Error/));
     });
 
-    it('should handle resetFilter', async () => {
-      await accessoryInstance.resetFilter();
-      assert.ok(mockLog.warn.calledWithMatch(/not implemented yet/));
-    });
     });
 
   describe('Helper Edge Cases', () => {
@@ -418,16 +464,96 @@ describe('DiffuserAccessory (Platinum Standard)', () => {
       assert.strictEqual(state, true);
     });
 
-    it('should log warning for setLock and revert state', async () => {
-      const clock = sinon.useFakeTimers();
-      const spy = sinon.spy(accessoryInstance, 'pollStatus');
+    it('should call deviceLock.do when setting lock to 1', async () => {
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({
+        statusCode: 200,
+        on: (evt, cb) => { if (evt === 'data') cb(JSON.stringify({ status: '200' })); if (evt === 'end') cb(); }
+      });
 
       await accessoryInstance.setLock(1);
 
-      assert.ok(mockLog.warn.calledWithMatch(/Lock control not yet implemented/));
+      const args = httpRequestStub.firstCall.args[0];
+      assert.ok(args.path.includes('/admin/amos/deviceLock.do'), 'Must call deviceLock.do');
+    });
 
-      clock.tick(1001);
-      assert.ok(spy.calledOnce, 'Should re-poll status after timeout');
+    it('should call deviceUnlock.do with params when setting lock to 0', async () => {
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({
+        statusCode: 200,
+        on: (evt, cb) => { if (evt === 'data') cb(JSON.stringify({ status: '200' })); if (evt === 'end') cb(); }
+      });
+
+      await accessoryInstance.setLock(0);
+
+      const args = httpRequestStub.firstCall.args[0];
+      assert.ok(args.path.includes('/admin/amos/deviceUnlock.do'), 'Must call deviceUnlock.do');
+      assert.ok(args.path.includes('days=0'), 'Must include days=0');
+    });
+
+    it('should call resetLiquidLevel.do with 100 when resetting filter', async () => {
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({
+        statusCode: 200,
+        on: (evt, cb) => { if (evt === 'data') cb(JSON.stringify({ status: '200', data: true })); if (evt === 'end') cb(); }
+      });
+
+      await accessoryInstance.resetFilter(1);
+
+      const args = httpRequestStub.firstCall.args[0];
+      assert.ok(args.path.includes('/resetLiquidLevel.do'), 'Must call resetLiquidLevel.do');
+      assert.ok(args.path.includes('liquidLevel=100'), 'Must set level to 100');
+
+      // Verify local updates
+      const filterService = mockAccessory.getService(Service.FilterMaintenance);
+      assert.ok(filterService.updateCharacteristic.calledWith(Characteristic.FilterLifeLevel, 100));
+    });
+
+    it('should handle API failure in resetFilter', async () => {
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({ statusCode: 500, on: (evt, cb) => { if (evt === 'end') cb(); } });
+
+      await assert.rejects(accessoryInstance.resetFilter(1), mockApi.hap.HapStatusError);
+      assert.ok(mockLog.error.calledWithMatch(/Failed to Reset Filter/));
+    });
+
+    it('should handle API failure in setLock (Revert)', async () => {
+      const clock = sinon.useFakeTimers();
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({ statusCode: 500, on: (evt, cb) => { if (evt === 'end') cb(); } });
+
+      const promise = accessoryInstance.setLock(1);
+
+      await assert.rejects(promise, mockApi.hap.HapStatusError);
+      assert.ok(mockLog.error.calledWithMatch(/Failed to set Lock/));
+
+      // Verify revert logic
+      clock.tick(501);
+      // The revert logic calls this.service.updateCharacteristic directly
+      const fanService = mockAccessory.getService(Service.Fan);
+      assert.ok(fanService.updateCharacteristic.calledWith(Characteristic.LockPhysicalControls, 0), 'Should revert to 0 if set to 1 failed');
+
+      clock.restore();
+    });
+
+    it('should handle API failure in setLock(0) (Revert to Locked)', async () => {
+      const clock = sinon.useFakeTimers();
+      const mockReq = { on: sinon.stub(), write: sinon.stub(), end: sinon.stub() };
+      httpRequestStub.returns(mockReq);
+      httpRequestStub.yields({ statusCode: 500, on: (evt, cb) => { if (evt === 'end') cb(); } });
+
+      const promise = accessoryInstance.setLock(0);
+
+      await assert.rejects(promise, mockApi.hap.HapStatusError);
+
+      clock.tick(501);
+      const fanService = mockAccessory.getService(Service.Fan);
+      assert.ok(fanService.updateCharacteristic.calledWith(Characteristic.LockPhysicalControls, 1), 'Should revert to 1 if set to 0 failed');
 
       clock.restore();
     });
